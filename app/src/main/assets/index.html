@@ -1,0 +1,775 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Horizon Flight</title>
+<style>
+  :root{--hud:#7CFFB2;--warn:#ff5a5a;--panel:rgba(6,18,28,.55);--line:rgba(124,255,178,.45)}
+  html,body{margin:0;height:100%;overflow:hidden;background:#000;color:#fff;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    touch-action:none;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent}
+  #gl{position:fixed;inset:0;width:100%;height:100%;display:block}
+  .hud{position:fixed;pointer-events:none;font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--hud);text-shadow:0 0 4px #000}
+  #readouts{left:16px;top:14px;display:grid;grid-template-columns:auto auto;gap:4px 14px;font-size:15px;background:var(--panel);padding:10px 12px;border-radius:12px;border:1px solid var(--line)}
+  #readouts b{font-size:22px;font-weight:700;color:#e9fff3}
+  #readouts span{opacity:.75;font-size:11px;letter-spacing:.08em}
+  #attitude{right:16px;top:14px;width:124px;height:124px;border-radius:50%;border:1px solid var(--line);background:var(--panel);overflow:hidden}
+  #heading{right:16px;top:146px;width:124px;text-align:center;font-size:17px;background:var(--panel);border-radius:8px;padding:4px 0;border:1px solid var(--line)}
+  #status{left:50%;top:24%;transform:translateX(-50%);font-size:18px;font-weight:700;letter-spacing:.06em;text-align:center;white-space:nowrap}
+  #status.warn{color:var(--warn);animation:blink .5s steps(2,start) infinite}
+  #status.ok{color:#bfffd9}
+  #status.crash{color:var(--warn);font-size:24px}
+  #toast{left:50%;top:34%;transform:translateX(-50%);font-size:15px;opacity:0;transition:opacity .4s;background:var(--panel);padding:6px 12px;border-radius:10px}
+  #toast.show{opacity:1}
+  @keyframes blink{50%{opacity:.15}}
+  .ctl{pointer-events:auto}
+  .btn{background:rgba(8,26,38,.7);border:1px solid var(--line);color:#dffff0;border-radius:10px;padding:8px 10px;font:600 13px system-ui,sans-serif;min-width:58px;text-align:center}
+  .btn:active,.btn.on{background:rgba(124,255,178,.25)}
+  #utils{position:fixed;left:200px;right:200px;top:10px;display:flex;flex-wrap:wrap;justify-content:center;gap:6px}
+  #utils .btn{min-width:0;padding:7px 9px;font-size:12px}
+  #rudder{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);display:flex;gap:10px}
+  #rudder .btn{min-width:86px;padding:14px 0;font-size:18px}
+  #stick{position:fixed;left:24px;bottom:24px;width:150px;height:150px;border-radius:50%;background:radial-gradient(circle,rgba(124,255,178,.12),rgba(0,0,0,.25));border:2px solid var(--line)}
+  #knob{position:absolute;left:47px;top:47px;width:56px;height:56px;border-radius:50%;background:rgba(124,255,178,.35);border:2px solid #bfffd9;box-shadow:0 0 12px rgba(124,255,178,.4)}
+  #thr{position:fixed;right:24px;bottom:24px;width:74px;height:168px;border-radius:14px;background:var(--panel);border:1px solid var(--line)}
+  #thrFill{position:absolute;left:8px;right:8px;bottom:8px;height:0;border-radius:8px;background:linear-gradient(#bfffd9,#2ea866)}
+  #thrLbl{position:absolute;top:6px;left:0;right:0;text-align:center;font:700 13px ui-monospace,monospace;color:#dffff0}
+  #thrHandle{position:absolute;left:0;right:0;height:4px;background:#e9fff3;border-radius:2px}
+  #hint{left:50%;bottom:4px;transform:translateX(-50%);font-size:11px;opacity:.55;white-space:nowrap}
+  #portrait{display:none;position:fixed;inset:0;background:#000;z-index:9;align-items:center;justify-content:center;text-align:center;padding:24px}
+  @media (orientation:portrait){#portrait{display:flex}}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<div id="readouts" class="hud">
+  <div><b id="ias">0</b><br><span>IAS KT</span></div>
+  <div><b id="alt">0</b><br><span>ALT FT</span></div>
+  <div><b id="vs">0</b><br><span>V/S FT/MIN</span></div>
+  <div><b id="agl">0</b><br><span>AGL FT</span></div>
+</div>
+
+<canvas id="attitude" class="hud" width="248" height="248"></canvas>
+<div id="heading" class="hud">HDG 090</div>
+
+<div id="status" class="hud"></div>
+<div id="toast" class="hud"></div>
+
+<div id="utils" class="hud ctl">
+  <div class="btn" id="btnFlap">FLAPS 0°</div>
+  <div class="btn" id="btnView">KAMERA</div>
+  <div class="btn" id="btnTime">ZEIT 10:30</div>
+  <div class="btn" id="btnPause">PAUSE</div>
+  <div class="btn" id="btnReset">RESET (R)</div>
+  <div class="btn" id="btnSound">TON</div>
+</div>
+
+<div id="stick" class="ctl"><div id="knob"></div></div>
+
+<div id="rudder" class="ctl">
+  <div class="btn" id="rudL">◀ SEITE</div>
+  <div class="btn" id="rudR">SEITE ▶</div>
+</div>
+
+<div id="thr" class="ctl">
+  <div id="thrLbl">0%</div>
+  <div id="thrFill"></div>
+</div>
+
+<div id="hint" class="hud">Stick: Nase/Querruder · Schieber rechts: Gas · Tasten unten: Seitenruder · Pfeile/WASD, Q/E, Shift/Strg, F, C, P, R</div>
+
+<div id="portrait"><div>Bitte das Handy ins <b>Querformat</b> drehen.</div></div>
+
+<script src="vendor/three.min.js"></script>
+<script>
+"use strict";
+(function(){
+if (typeof THREE === "undefined") { document.body.innerHTML = "<p style='padding:20px'>Three.js konnte nicht geladen werden.</p>"; return; }
+
+// ============================================================
+// Helpers
+// ============================================================
+const PI = Math.PI, TAU = PI * 2;
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
+const KT = 1.94384, FT = 3.28084, FPM = 196.85;
+const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+const $ = (id) => document.getElementById(id);
+
+// ============================================================
+// Procedural terrain (value-noise fBm + ridges + flattened airfield)
+// ============================================================
+function hash(ix, iy) {
+  let h = Math.imul(ix, 374761393) + Math.imul(iy, 668265263);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function vnoise(x, y) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const a = hash(ix, iy), b = hash(ix + 1, iy), c = hash(ix, iy + 1), d = hash(ix + 1, iy + 1);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+function fbm(x, y, oct) {
+  let s = 0, amp = 0.5, f = 1, n = 0;
+  for (let i = 0; i < oct; i++) { s += amp * vnoise(x * f, y * f); n += amp; amp *= 0.5; f *= 2.03; }
+  return s / n;
+}
+const AIRFIELD = { hx: 720, hz: 48, blend: 200, elev: 1.5 };
+function rawHeight(x, z) {
+  const m = fbm(x * 0.00042 + 17.3, z * 0.00042 - 9.1, 5);
+  let h = Math.pow(m, 2.4) * 1100 - 170;
+  const r = 1 - Math.abs(vnoise(x * 0.0009 + 3, z * 0.0009 - 5) * 2 - 1);
+  h += r * r * r * 260 * smooth(0.45, 0.7, m);
+  h += (fbm(x * 0.012, z * 0.012, 3) - 0.5) * 16;
+  return h;
+}
+function heightAt(x, z) {
+  const h = rawHeight(x, z);
+  const ex = Math.max(Math.abs(x) - AIRFIELD.hx, 0), ez = Math.max(Math.abs(z) - AIRFIELD.hz, 0);
+  const w = 1 - smooth(0, AIRFIELD.blend, Math.hypot(ex, ez));
+  return h * (1 - w) + AIRFIELD.elev * w;
+}
+const STOPS = [
+  [-30, [0.08, 0.22, 0.34]], [0.5, [0.84, 0.78, 0.52]], [6, [0.36, 0.56, 0.24]],
+  [120, [0.25, 0.46, 0.2]], [260, [0.16, 0.36, 0.17]], [420, [0.46, 0.42, 0.37]],
+  [560, [0.9, 0.92, 0.95]]
+];
+function terrainColor(h, out) {
+  if (h <= STOPS[0][0]) { const c0 = STOPS[0][1]; out.setRGB(c0[0], c0[1], c0[2]); return; }
+  for (let i = 1; i < STOPS.length; i++) {
+    if (h <= STOPS[i][0]) {
+      const [h0, c0] = STOPS[i - 1], [h1, c1] = STOPS[i];
+      const t = smooth(h0, h1, h);
+      out.setRGB(c0[0] + (c1[0] - c0[0]) * t, c0[1] + (c1[1] - c0[1]) * t, c0[2] + (c1[2] - c0[2]) * t);
+      return;
+    }
+  }
+  const cl = STOPS[STOPS.length - 1][1]; out.setRGB(cl[0], cl[1], cl[2]);
+}
+
+// ============================================================
+// Renderer, scene, lights, sky
+// ============================================================
+const canvas = $("gl");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setSize(window.innerWidth, window.innerHeight, false);
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0xbcd8f0, 1500, 6500);
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.5, 16000);
+
+const hemi = new THREE.HemisphereLight(0xcfe6ff, 0x3b4d2c, 0.7);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffffff, 1.0);
+scene.add(sun);
+
+const skyMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  uniforms: {
+    topCol: { value: new THREE.Color() }, horizCol: { value: new THREE.Color() },
+    sunCol: { value: new THREE.Color(1, 0.95, 0.8) }, sunDir: { value: V3(0, 1, 0) }, sunVis: { value: 1 }
+  },
+  vertexShader: `varying vec3 vW; void main(){ vW = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `
+    uniform vec3 topCol; uniform vec3 horizCol; uniform vec3 sunCol; uniform vec3 sunDir; uniform float sunVis;
+    varying vec3 vW;
+    void main(){
+      vec3 d = normalize(vW);
+      float h = d.y;
+      vec3 col = mix(horizCol, topCol, pow(clamp(h, 0.0, 1.0), 0.45));
+      if (h < 0.0) col = mix(horizCol, horizCol * 0.6, clamp(-h * 4.0, 0.0, 1.0));
+      float s = max(dot(d, normalize(sunDir)), 0.0);
+      col += sunCol * (pow(s, 600.0) * 3.0 + pow(s, 24.0) * 0.35) * sunVis;
+      gl_FragColor = vec4(col, 1.0);
+    }`
+});
+const sky = new THREE.Mesh(new THREE.SphereGeometry(9000, 32, 16), skyMat);
+scene.add(sky);
+
+// ============================================================
+// Terrain + water
+// ============================================================
+const SIZE = 9000, SEG = 260;
+const tGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
+tGeo.rotateX(-PI / 2);
+{
+  const pos = tGeo.attributes.position, col = new Float32Array(pos.count * 3), c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i), h = heightAt(x, z);
+    pos.setY(i, h);
+    terrainColor(h, c);
+    const jitter = 0.92 + 0.16 * vnoise(x * 0.02, z * 0.02);
+    col[i * 3] = c.r * jitter; col[i * 3 + 1] = c.g * jitter; col[i * 3 + 2] = c.b * jitter;
+  }
+  tGeo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  tGeo.computeVertexNormals();
+}
+const terrain = new THREE.Mesh(tGeo, new THREE.MeshLambertMaterial({ vertexColors: true }));
+scene.add(terrain);
+
+const water = new THREE.Mesh(new THREE.PlaneGeometry(SIZE * 1.6, SIZE * 1.6).rotateX(-PI / 2),
+  new THREE.MeshLambertMaterial({ color: 0x1b5a86, transparent: true, opacity: 0.92 }));
+water.position.y = -0.2;
+scene.add(water);
+
+// Runway + markings
+const runway = new THREE.Group();
+runway.add(new THREE.Mesh(new THREE.PlaneGeometry(1440, 60).rotateX(-PI / 2),
+  new THREE.MeshLambertMaterial({ color: 0x3a3e42 })));
+runway.children[0].position.y = AIRFIELD.elev + 0.03;
+const white = new THREE.MeshLambertMaterial({ color: 0xf2f2f2 });
+for (let x = -660; x <= 660; x += 60) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(30, 0.06, 1.2), white);
+  m.position.set(x, AIRFIELD.elev + 0.05, 0); runway.add(m);
+}
+for (const sx of [-1, 1]) for (let k = -4; k <= 4; k++) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(3, 0.06, 2.4), white);
+  m.position.set(sx * 690, AIRFIELD.elev + 0.05, k * 4); runway.add(m);
+}
+scene.add(runway);
+// Hangars
+const hangarMat = new THREE.MeshLambertMaterial({ color: 0xb7bcc2 });
+for (const [x, z, w] of [[-760, -120, 90], [-760, -200, 70], [-640, -160, 50]]) {
+  const b = new THREE.Mesh(new THREE.BoxGeometry(w, 16, 40), hangarMat);
+  b.position.set(x, AIRFIELD.elev + 8, z); scene.add(b);
+}
+
+// Trees (instanced)
+{
+  const N = 3200;
+  const tree = new THREE.InstancedMesh(new THREE.ConeGeometry(3.2, 11, 6).translate(0, 5.5, 0),
+    new THREE.MeshLambertMaterial({ color: 0xffffff }), N);
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), s = V3(1, 1, 1), p = V3(), c = new THREE.Color();
+  let n = 0, tries = 0;
+  while (n < N && tries < N * 8) {
+    tries++;
+    const x = (Math.random() * 2 - 1) * 3600, z = (Math.random() * 2 - 1) * 3600;
+    const h = heightAt(x, z);
+    if (h < 2 || h > 230) continue;
+    if (Math.abs(x) < 800 && Math.abs(z) < 120) continue;
+    const slope = Math.abs(heightAt(x + 12, z) - h) + Math.abs(heightAt(x, z + 12) - h);
+    if (slope > 9) continue;
+    const sc = 0.8 + Math.random() * 1.1;
+    s.set(sc, sc * (0.9 + Math.random() * 0.7), sc);
+    p.set(x, h, z);
+    m4.compose(p, q, s);
+    tree.setMatrixAt(n, m4);
+    c.setRGB(0.1 + Math.random() * 0.12, 0.3 + Math.random() * 0.2, 0.1 + Math.random() * 0.08);
+    tree.setColorAt(n, c);
+    n++;
+  }
+  tree.count = n;
+  tree.instanceMatrix.needsUpdate = true;
+  if (tree.instanceColor) tree.instanceColor.needsUpdate = true;
+  scene.add(tree);
+}
+
+// Clouds (shared material so they follow the time of day)
+const cloudMat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthWrite: false });
+for (let i = 0; i < 70; i++) {
+  const g = new THREE.Group();
+  const cx = (Math.random() * 2 - 1) * 4200, cz = (Math.random() * 2 - 1) * 4200, cy = 650 + Math.random() * 1700;
+  const n = 6 + Math.floor(Math.random() * 7), spread = 160 + Math.random() * 200;
+  for (let k = 0; k < n; k++) {
+    const r = 60 + Math.random() * 90;
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 9, 7), cloudMat);
+    m.position.set((Math.random() - 0.5) * spread, (Math.random() - 0.5) * 40, (Math.random() - 0.5) * spread * 0.6);
+    g.add(m);
+  }
+  g.position.set(cx, cy, cz);
+  scene.add(g);
+}
+
+// ============================================================
+// Aircraft (procedural light single, nose toward -Z)
+// ============================================================
+const plane = new THREE.Group();
+{
+  const whiteM = new THREE.MeshLambertMaterial({ color: 0xf1f3f4 });
+  const blueM = new THREE.MeshLambertMaterial({ color: 0x1f4f9a });
+  const darkM = new THREE.MeshLambertMaterial({ color: 0x202325 });
+  const glassM = new THREE.MeshPhongMaterial({ color: 0x7fb6dd, transparent: true, opacity: 0.55, shininess: 120 });
+  const add = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); plane.add(m); return m; };
+  const fus = new THREE.CylinderGeometry(0.55, 0.42, 8, 14).rotateX(PI / 2);
+  add(fus, whiteM, 0, 0, 0.4);
+  add(new THREE.CylinderGeometry(0.1, 0.42, 0.9, 12).rotateX(-PI / 2), whiteM, 0, 0, -4.05);
+  add(new THREE.BoxGeometry(0.03, 0.14, 6.2), blueM, 0.56, 0.05, 0.4);
+  add(new THREE.BoxGeometry(0.03, 0.14, 6.2), blueM, -0.56, 0.05, 0.4);
+  add(new THREE.BoxGeometry(11, 0.14, 1.7), whiteM, 0, 0.25, -0.5);
+  add(new THREE.BoxGeometry(0.9, 0.12, 1.2), blueM, 5.2, 0.25, -0.5).rotation.z = 0;
+  add(new THREE.BoxGeometry(0.9, 0.12, 1.2), blueM, -5.2, 0.25, -0.5);
+  add(new THREE.BoxGeometry(0.1, 1.7, 1.3), whiteM, 0, 1.0, 4.1);
+  add(new THREE.BoxGeometry(3.9, 0.1, 1.05), whiteM, 0, 0.4, 4.0);
+  const canopy = add(new THREE.SphereGeometry(0.55, 16, 8, 0, TAU, 0, PI / 2), glassM, 0, 0.55, -1.2);
+  canopy.scale.set(1.0, 0.6, 1.8);
+  for (const sx of [-1, 1]) {
+    add(new THREE.BoxGeometry(0.08, 0.9, 0.08), darkM, sx * 1.2, -0.85, -0.6);
+    add(new THREE.CylinderGeometry(0.36, 0.36, 0.22, 12).rotateZ(PI / 2), darkM, sx * 1.2, -1.3, -0.6);
+  }
+  add(new THREE.BoxGeometry(0.08, 0.9, 0.08), darkM, 0, -0.75, -3.2);
+  add(new THREE.CylinderGeometry(0.22, 0.22, 0.2, 12).rotateX(PI / 2), darkM, 0, -1.25, -3.2);
+  // Propeller
+  const prop = new THREE.Group();
+  prop.position.set(0, 0, -4.6);
+  prop.add(new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.0, 0.05), darkM));
+  prop.add(new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.0, 0.05), darkM).rotateZ(PI / 2));
+  prop.add(new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.4, 10).rotateX(-PI / 2), whiteM));
+  plane.add(prop);
+  plane.userData.prop = prop;
+}
+scene.add(plane);
+
+// ============================================================
+// Flight model
+// ============================================================
+const MASS = 1000, S = 16, RHO = 1.225, G = 9.81, THRUST = 2100, CLEAR = 1.3;
+const WORLD_HALF = 4300;
+const START = { x: -620, z: 0, heading: PI / 2 };
+const sim = {
+  pos: V3(START.x, 0, START.z), vel: V3(0, 0, 0),
+  heading: START.heading, pitch: 0, bank: 0,
+  throttle: 0, flaps: 0,
+  onGround: true, stalled: false, crashed: false, paused: false,
+  alpha: 0, timeH: 10.5, lastVS: 0
+};
+sim.pos.y = heightAt(START.x, START.z) + CLEAR;
+
+const ctrl = { pitch: 0, roll: 0, rudder: 0, e: 0, a: 0, r: 0 };   // raw targets and smoothed values
+const joy = { x: 0, y: 0, id: null };
+const rudTouch = { v: 0 };
+const kb = {};
+const keyState = {};
+
+function attitudeQuat(s) {
+  return new THREE.Quaternion().setFromEuler(new THREE.Euler(s.pitch, -s.heading, -s.bank, "YXZ"));
+}
+
+function flapsDeg() { return sim.flaps * 30; }
+
+function physicsStep(dt) {
+  const s = sim;
+  if (s.crashed) return;
+
+  ctrl.e += (ctrl.pitch - ctrl.e) * Math.min(1, dt * 8);
+  ctrl.a += (ctrl.roll - ctrl.a) * Math.min(1, dt * 10);
+  ctrl.r += (ctrl.rudder - ctrl.r) * Math.min(1, dt * 6);
+
+  const q = attitudeQuat(s);
+  const qInv = q.clone().invert();
+  const fwd = V3(0, 0, -1).applyQuaternion(q);
+  const right = V3(1, 0, 0).applyQuaternion(q);
+  const up = V3(0, 1, 0).applyQuaternion(q);
+  const V = s.vel.length();
+  const Vs = Math.max(V, 0.01);
+  const vb = s.vel.clone().applyQuaternion(qInv);
+  const alpha = V < 0.5 ? s.pitch : Math.atan2(-vb.y, -vb.z);
+  s.alpha = alpha;
+  // Lift acts perpendicular to the flight path (not along the body axis)
+  const vHat = V > 0.01 ? s.vel.clone().multiplyScalar(1 / V) : fwd.clone();
+  const liftDir = up.clone().addScaledVector(vHat, -up.dot(vHat));
+  if (liftDir.lengthSq() < 1e-6) liftDir.copy(up); else liftDir.normalize();
+
+  // Lift / drag
+  const aStall = 0.27, aa = Math.abs(alpha);
+  let CL = aa <= aStall ? 5.2 * alpha : Math.sign(alpha) * Math.max(0.25, 5.2 * aStall - (aa - aStall) * 14);
+  const flapN = s.flaps;
+  CL += 0.45 * flapN;
+  s.stalled = aa > aStall && !s.onGround;
+  const qS = 0.5 * RHO * Vs * Vs * S;
+  const L = qS * CL;
+  const D = qS * (0.035 + 0.045 * CL * CL + 0.05 * flapN);
+
+  const acc = V3(0, 0, 0);
+  acc.addScaledVector(liftDir, L / MASS);
+  if (V > 0.01) acc.addScaledVector(s.vel, -D / (MASS * V));
+  const thrust = s.throttle * THRUST * (1 - 0.6 * clamp(V / 90, 0, 1));
+  acc.addScaledVector(fwd, thrust / MASS);
+  acc.y -= G;
+
+  // Damp lateral slip (approximates coordinated flight)
+  s.vel.addScaledVector(right, -vb.x * Math.min(1, dt * 2.5));
+  s.vel.addScaledVector(acc, dt);
+
+  // Attitude
+  const onG = s.onGround;
+  // Elevator = pitch rate; a gentle auto-trim returns the nose toward level when hands are off the stick
+  const trim = (!onG && Math.abs(ctrl.e) < 0.05) ? (0.03 - s.pitch) * 0.35 : 0;
+  const pitchRate = onG ? ctrl.e * 0.45 * clamp(V / 25, 0, 1)
+                        : ctrl.e * 0.9 * clamp(0.5 + V / 60, 0.35, 1.25) + trim;
+  s.pitch = clamp(s.pitch + pitchRate * dt, onG ? -0.03 : -1.4, onG ? 0.22 : 1.4);
+  const bankRate = ctrl.a * 1.5 + (Math.abs(ctrl.a) < 0.05 ? -s.bank * 0.8 : 0);
+  s.bank = clamp(s.bank + bankRate * dt, -1.35, 1.35);
+
+  if (!onG) {
+    const turnRate = G * clamp(Math.tan(s.bank), -2, 2) / Math.max(V, 22);
+    s.heading += (turnRate + ctrl.r * 0.18 * clamp(V / 50, 0.2, 1)) * dt;
+    // weak weathercock tendency of the airflow toward the nose
+    s.vel.lerp(fwd.clone().multiplyScalar(V), Math.min(1, dt * 0.04));
+  } else {
+    s.heading += ctrl.r * 0.9 * clamp(V / 10, 0, 1) * dt;
+  }
+
+  // Integrate position
+  s.pos.addScaledVector(s.vel, dt);
+  s.pos.x = clamp(s.pos.x, -WORLD_HALF, WORLD_HALF);
+  s.pos.z = clamp(s.pos.z, -WORLD_HALF, WORLD_HALF);
+
+  // Ground contact
+  const gnd = heightAt(s.pos.x, s.pos.z);
+  const agl = s.pos.y - gnd - CLEAR;
+  if (agl <= 0) {
+    const impact = -s.vel.y;
+    if (!s.onGround && impact > 0.2) {
+      if (impact > 5.5 || Math.abs(s.bank) > 0.6 || (s.pitch < -0.25)) return crash("Harte Landung – Absturz");
+      if (impact > 2.5) toast("Harte Landung", 2200);
+      else toast("Touchdown", 1600);
+    }
+    if (s.onGround && Math.abs(s.bank) > 0.35 && V > 12) return crash("Flügelspitze berührt Boden");
+    s.pos.y = gnd + CLEAR;
+    if (s.vel.y < 0) s.vel.y = 0;
+    s.onGround = true;
+    // Rolling: keep motion along the nose, rolling resistance
+    const fH = V3(Math.sin(s.heading), 0, -Math.cos(s.heading));
+    let along = s.vel.x * fH.x + s.vel.z * fH.z;
+    along -= Math.sign(along) * Math.min(Math.abs(along), 0.4 * dt);
+    s.vel.x = fH.x * along; s.vel.z = fH.z * along;
+  } else {
+    if (s.onGround) toast(V > 20 ? "Abheben" : "Vom Boden", 1400);
+    s.onGround = false;
+  }
+  if (gnd < 0 && agl <= 0 && s.onGround) { /* water – treated as a hard surface */ }
+}
+
+function crash(msg) {
+  sim.crashed = true;
+  sim.vel.set(0, 0, 0);
+  setStatus(msg + " — R drücken zum Neustart", "crash");
+}
+
+function resetSim() {
+  sim.pos.set(START.x, 0, START.z);
+  sim.pos.y = heightAt(START.x, START.z) + CLEAR;
+  sim.vel.set(0, 0, 0);
+  sim.heading = START.heading; sim.pitch = 0; sim.bank = 0;
+  sim.throttle = 0; sim.flaps = 0;
+  sim.onGround = true; sim.stalled = false; sim.crashed = false;
+  ctrl.e = ctrl.a = ctrl.r = 0;
+  setStatus("", "ok");
+  toast("Neustart am Startpunkt", 1600);
+}
+
+// ============================================================
+// Camera
+// ============================================================
+let camMode = "chase";
+const camPos = V3(0, 0, 0);
+let camInit = false;
+function updateCamera(dt) {
+  const q = attitudeQuat(sim);
+  const want = camMode === "chase" ? 60 : 72;
+  if (Math.abs(camera.fov - want) > 0.01) { camera.fov = want; camera.updateProjectionMatrix(); }
+  if (camMode === "cockpit") {
+    plane.visible = false;
+    camera.position.copy(sim.pos).add(V3(0, 0.55, -0.7).applyQuaternion(q));
+    camera.quaternion.copy(q);
+    camInit = false;
+  } else {
+    plane.visible = true;
+    const desired = sim.pos.clone().add(V3(0, 2.6, 11.5).applyQuaternion(q));
+    if (!camInit) { camPos.copy(desired); camInit = true; }
+    camPos.lerp(desired, 1 - Math.exp(-dt * 7));
+    camPos.y = Math.max(camPos.y, heightAt(camPos.x, camPos.z) + 2);
+    camera.position.copy(camPos);
+    const look = sim.pos.clone().add(V3(0, 0.6, 0)).addScaledVector(V3(0, 0, -1).applyQuaternion(q), 14);
+    camera.lookAt(look);
+  }
+  if (sim.stalled && !sim.onGround) {
+    camera.position.x += (Math.random() - 0.5) * 0.12;
+    camera.position.y += (Math.random() - 0.5) * 0.12;
+  }
+}
+
+// ============================================================
+// Day/night, sky, lighting
+// ============================================================
+const NIGHT_TOP = new THREE.Color(0.01, 0.015, 0.04), DAY_TOP = new THREE.Color(0.2, 0.45, 0.9);
+const NIGHT_H = new THREE.Color(0.05, 0.07, 0.12), DAY_H = new THREE.Color(0.62, 0.78, 0.95);
+const SUNSET = new THREE.Color(1.0, 0.5, 0.25);
+const tmpA = new THREE.Color(), tmpB = new THREE.Color();
+const sunDirV = V3(0, 1, 0);
+function updateSky() {
+  const t = sim.timeH;
+  const elev = Math.sin((t - 6) / 24 * TAU);
+  const az = (t - 6) / 24 * TAU;
+  sunDirV.set(Math.cos(az) * 0.6, elev, Math.sin(az) * 0.4 + 0.2).normalize();
+  const dayF = smooth(-0.16, 0.22, elev);
+  const sunsetF = Math.exp(-elev * elev * 40);
+  skyMat.uniforms.topCol.value.copy(tmpA.copy(NIGHT_TOP).lerp(DAY_TOP, dayF));
+  tmpB.copy(NIGHT_H).lerp(DAY_H, dayF).lerp(SUNSET, sunsetF * 0.8 * (dayF + 0.25));
+  skyMat.uniforms.horizCol.value.copy(tmpB);
+  skyMat.uniforms.sunDir.value.copy(sunDirV);
+  skyMat.uniforms.sunVis.value = dayF > 0.05 ? 1 : 0.3;
+  scene.fog.color.copy(tmpB);
+  sun.position.copy(sunDirV).multiplyScalar(1000);
+  sun.color.set(0xffffff).lerp(SUNSET, sunsetF * 0.75);
+  sun.intensity = 0.12 + 0.95 * dayF;
+  hemi.intensity = 0.22 + 0.5 * dayF;
+  cloudMat.color.setRGB(0.22 + 0.78 * dayF, 0.24 + 0.76 * dayF, 0.28 + 0.72 * dayF).lerp(SUNSET, sunsetF * 0.35);
+  $("btnTime").textContent = "ZEIT " + fmtTime(t);
+}
+function fmtTime(t) {
+  const h = Math.floor(t), m = Math.floor((t - h) * 60);
+  return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0");
+}
+
+// ============================================================
+// Audio (synth engine + wind, Web Audio)
+// ============================================================
+let audio = null, soundOn = true;
+function initAudio() {
+  if (audio) return;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC();
+    const osc = ctx.createOscillator(); osc.type = "sawtooth";
+    const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 500;
+    const eg = ctx.createGain(); eg.gain.value = 0;
+    osc.connect(lp); lp.connect(eg); eg.connect(ctx.destination); osc.start();
+    const buf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const ns = ctx.createBufferSource(); ns.buffer = buf; ns.loop = true;
+    const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 700;
+    const wg = ctx.createGain(); wg.gain.value = 0;
+    ns.connect(bp); bp.connect(wg); wg.connect(ctx.destination); ns.start();
+    audio = { ctx, osc, lp, eg, wg };
+    if (ctx.state === "suspended") ctx.resume();
+  } catch (e) { audio = null; }
+}
+function updateAudio() {
+  if (!audio) return;
+  const t = audio.ctx.currentTime, th = sim.throttle, V = sim.vel.length();
+  audio.osc.frequency.setTargetAtTime(55 + th * 140 + V * 0.4, t, 0.05);
+  audio.lp.frequency.setTargetAtTime(350 + th * 800, t, 0.1);
+  audio.eg.gain.setTargetAtTime(soundOn ? 0.03 + 0.06 * th : 0, t, 0.1);
+  audio.wg.gain.setTargetAtTime(soundOn ? Math.min(0.12, V / 600) : 0, t, 0.2);
+}
+
+// ============================================================
+// HUD
+// ============================================================
+const attCanvas = $("attitude"), actx = attCanvas.getContext("2d");
+function drawAttitude() {
+  const W = attCanvas.width, H = attCanvas.height, cx = W / 2, cy = H / 2;
+  const ppr = 300;
+  actx.save();
+  actx.clearRect(0, 0, W, H);
+  actx.beginPath(); actx.arc(cx, cy, cx - 2, 0, TAU); actx.clip();
+  actx.translate(cx, cy);
+  actx.rotate(-sim.bank);
+  actx.translate(0, sim.pitch * ppr);
+  actx.fillStyle = "#2f7fd1"; actx.fillRect(-W, -H * 2, W * 2, H * 2);
+  actx.fillStyle = "#8a5a2b"; actx.fillRect(-W, 0, W * 2, H * 2);
+  actx.strokeStyle = "#ffffff"; actx.lineWidth = 2;
+  actx.beginPath(); actx.moveTo(-W, 0); actx.lineTo(W, 0); actx.stroke();
+  actx.lineWidth = 1; actx.strokeStyle = "rgba(255,255,255,.7)";
+  for (let d = -20; d <= 20; d += 10) {
+    if (!d) continue;
+    actx.beginPath(); actx.moveTo(-18, -d * 0.1 * ppr / 10 * 1); actx.lineTo(18, -d * 0.1 * ppr / 10 * 1); actx.stroke();
+  }
+  actx.restore();
+  actx.save(); actx.translate(cx, cy);
+  actx.strokeStyle = "#ffd23a"; actx.lineWidth = 3;
+  actx.beginPath(); actx.moveTo(-42, 0); actx.lineTo(-14, 0); actx.lineTo(-14, 7); actx.moveTo(42, 0); actx.lineTo(14, 0); actx.lineTo(14, 7); actx.stroke();
+  actx.beginPath(); actx.arc(0, 0, 3, 0, TAU); actx.fillStyle = "#ffd23a"; actx.fill();
+  actx.restore();
+  actx.save(); actx.translate(cx, cy); actx.strokeStyle = "rgba(255,255,255,.85)"; actx.lineWidth = 2;
+  actx.beginPath(); actx.arc(0, 0, cx - 10, -PI * 0.75, -PI * 0.25); actx.stroke();
+  actx.rotate(-sim.bank);
+  actx.beginPath(); actx.moveTo(0, -(cx - 10)); actx.lineTo(-6, -(cx - 20)); actx.lineTo(6, -(cx - 20)); actx.closePath(); actx.fillStyle = "#fff"; actx.fill();
+  actx.restore();
+}
+
+let statusText = "", statusCls = "";
+function setStatus(text, cls) {
+  const el = $("status");
+  el.textContent = text;
+  el.className = (cls || "") + "";
+  el.id = "status";
+  if (cls) el.classList.add(cls);
+  statusText = text; statusCls = cls;
+}
+let toastTimer = 0;
+function toast(text, ms) {
+  const el = $("toast");
+  el.textContent = text;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), ms || 1500);
+}
+
+function updateHUD() {
+  const V = sim.vel.length();
+  $("ias").textContent = Math.round(V * KT);
+  $("alt").textContent = Math.round(sim.pos.y * FT);
+  $("vs").textContent = Math.round(sim.vel.y * FPM);
+  const agl = sim.pos.y - heightAt(sim.pos.x, sim.pos.z) - CLEAR;
+  $("agl").textContent = Math.max(0, Math.round(agl * FT));
+  const hdg = Math.round(((sim.heading * 180 / PI) % 360 + 360) % 360);
+  $("heading").textContent = "HDG " + String(hdg).padStart(3, "0") + "°";
+  const th = Math.round(sim.throttle * 100);
+  $("thrLbl").textContent = th + "%";
+  $("thrFill").style.height = (th * 0.84) + "%";
+  $("btnFlap").textContent = "FLAPS " + Math.round(flapsDeg()) + "°";
+  // Stall / state warnings
+  if (!sim.crashed) {
+    if (sim.stalled && !sim.onGround) { if (statusCls !== "warn" || !statusText.startsWith("STALL")) setStatus("STALL", "warn"); }
+    else if (statusCls === "warn" && statusText.startsWith("STALL")) setStatus("", "ok");
+  }
+  drawAttitude();
+}
+
+// ============================================================
+// Input: touch controls + keyboard
+// ============================================================
+const stick = $("stick"), knob = $("knob");
+function stickFromEvent(e) {
+  const r = stick.getBoundingClientRect();
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  const R = r.width / 2;
+  let dx = (e.clientX - cx) / R, dy = (e.clientY - cy) / R;
+  const len = Math.hypot(dx, dy);
+  if (len > 1) { dx /= len; dy /= len; }
+  joy.x = dx; joy.y = -dy;
+  knob.style.left = (r.width / 2 - 28 + dx * (R - 34)) + "px";
+  knob.style.top = (r.height / 2 - 28 + dy * (R - 34)) + "px";
+}
+function resetStick() {
+  joy.x = 0; joy.y = 0; joy.id = null;
+  knob.style.left = "47px"; knob.style.top = "47px";
+}
+stick.addEventListener("pointerdown", (e) => { joy.id = e.pointerId; stick.setPointerCapture(e.pointerId); initAudio(); stickFromEvent(e); });
+stick.addEventListener("pointermove", (e) => { if (e.pointerId === joy.id) stickFromEvent(e); });
+stick.addEventListener("pointerup", (e) => { if (e.pointerId === joy.id) resetStick(); });
+stick.addEventListener("pointercancel", () => resetStick());
+
+const thr = $("thr");
+let thrDrag = null;
+function thrFromEvent(e) {
+  const r = thr.getBoundingClientRect();
+  const t = clamp(1 - (e.clientY - r.top - 8) / (r.height - 16), 0, 1);
+  sim.throttle = Math.round(t * 100) / 100;
+}
+thr.addEventListener("pointerdown", (e) => { thrDrag = e.pointerId; thr.setPointerCapture(e.pointerId); initAudio(); thrFromEvent(e); });
+thr.addEventListener("pointermove", (e) => { if (e.pointerId === thrDrag) thrFromEvent(e); });
+thr.addEventListener("pointerup", () => { thrDrag = null; });
+thr.addEventListener("pointercancel", () => { thrDrag = null; });
+
+function bindHold(id, v) {
+  const el = $(id);
+  el.addEventListener("pointerdown", (e) => { el.setPointerCapture(e.pointerId); rudTouch.v = v; el.classList.add("on"); initAudio(); });
+  const end = () => { rudTouch.v = 0; el.classList.remove("on"); };
+  el.addEventListener("pointerup", end);
+  el.addEventListener("pointercancel", end);
+}
+bindHold("rudL", -1);
+bindHold("rudR", 1);
+
+$("btnFlap").addEventListener("click", () => {
+  sim.flaps = sim.flaps === 0 ? 0.5 : sim.flaps === 0.5 ? 1 : 0;
+  toast("Klappen " + Math.round(flapsDeg()) + "°", 1000);
+});
+$("btnView").addEventListener("click", () => {
+  camMode = camMode === "chase" ? "cockpit" : "chase";
+  $("btnView").textContent = "KAMERA: " + (camMode === "chase" ? "Chase" : "Cockpit");
+});
+$("btnTime").addEventListener("click", () => { sim.timeH = (sim.timeH + 2) % 24; updateSky(); });
+$("btnPause").addEventListener("click", () => {
+  sim.paused = !sim.paused;
+  $("btnPause").classList.toggle("on", sim.paused);
+  $("btnPause").textContent = sim.paused ? "WEITER" : "PAUSE";
+  setStatus(sim.paused ? "PAUSE" : "", sim.paused ? "ok" : "");
+});
+$("btnReset").addEventListener("click", resetSim);
+$("btnSound").addEventListener("click", () => {
+  soundOn = !soundOn; initAudio();
+  $("btnSound").textContent = soundOn ? "TON" : "STUMM";
+});
+
+window.addEventListener("keydown", (e) => {
+  keyState[e.code] = true;
+  if (e.code === "KeyF" && !e.repeat) $("btnFlap").click();
+  if (e.code === "KeyC" && !e.repeat) $("btnView").click();
+  if (e.code === "KeyP" && !e.repeat) $("btnPause").click();
+  if (e.code === "KeyR" && !e.repeat) resetSim();
+  if (e.code === "KeyT" && !e.repeat) $("btnTime").click();
+  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) e.preventDefault();
+});
+window.addEventListener("keyup", (e) => { keyState[e.code] = false; });
+window.addEventListener("blur", () => { for (const k in keyState) keyState[k] = false; });
+
+function readInputs(dt) {
+  const k = (a, b) => (keyState[a] || keyState[b] ? 1 : 0);
+  const kPitch = k("ArrowUp", "KeyW") - k("ArrowDown", "KeyS");
+  const kRoll = k("ArrowRight", "KeyD") - k("ArrowLeft", "KeyA");
+  const kRud = k("KeyE", "KeyE") - k("KeyQ", "KeyQ");
+  ctrl.pitch = clamp(joy.y + kPitch, -1, 1);
+  ctrl.roll = clamp(joy.x + kRoll, -1, 1);
+  ctrl.rudder = clamp(rudTouch.v + kRud, -1, 1);
+  if (keyState.ShiftLeft || keyState.ShiftRight) sim.throttle = clamp(sim.throttle + dt * 0.5, 0, 1);
+  if (keyState.ControlLeft || keyState.ControlRight) sim.throttle = clamp(sim.throttle - dt * 0.5, 0, 1);
+}
+
+// ============================================================
+// Main loop (fixed-step physics, variable render)
+// ============================================================
+window.addEventListener("resize", () => {
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+});
+
+const FIXED = 1 / 120;
+let acc = 0, last = performance.now();
+function frame(now) {
+  requestAnimationFrame(frame);
+  let dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  readInputs(dt);
+  if (!sim.paused) {
+    acc += dt;
+    while (acc >= FIXED) { physicsStep(FIXED); acc -= FIXED; }
+    if (!sim.crashed) sim.timeH += dt * 0 ;   // time of day only changes via the ZEIT button
+  } else acc = 0;
+
+  // Keep the plane model in sync
+  const q = attitudeQuat(sim);
+  plane.position.copy(sim.pos);
+  plane.quaternion.copy(q);
+  plane.userData.prop.rotation.z += dt * (sim.paused ? 0 : 20 + sim.throttle * 260);
+  if (sim.stalled && !sim.onGround) plane.position.x += (Math.random() - 0.5) * 0.05;
+
+  sky.position.copy(camera.position);
+  updateCamera(dt);
+  updateHUD();
+  updateAudio();
+  renderer.render(scene, camera);
+}
+updateSky();
+setStatus("", "ok");
+toast("Vollgas auf der Piste – Stick zum Rotieren ziehen", 3200);
+requestAnimationFrame(frame);
+
+// Test hook (used by automated checks only)
+window.__sim = sim;
+window.__step = physicsStep;
+window.__ctrl = ctrl;
+})();
+</script>
+</body>
+</html>
