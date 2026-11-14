@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NFC-Manager</string>
+    <string name="hce_service_description">Stellt den in der App gewählten NDEF-Inhalt als NFC-Tag bereit.</string>
+    <string name="hce_aid_description">NFC Forum Type 4 Tag (NDEF)</string>
+</resources>
