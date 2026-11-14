@@ -5,6 +5,9 @@ on:
     branches: [ main, master, nfc-manager ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -25,3 +28,10 @@ jobs:
         with:
           name: NfcManager-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+      - name: APK als Release-Datei veröffentlichen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk NfcManager-debug.apk
+          gh release delete nfc-manager-debug --yes --cleanup-tag || true
+          gh release create nfc-manager-debug NfcManager-debug.apk --title "NFC-Manager Debug-APK" --notes "Automatisch gebaut aus Branch nfc-manager." --target "$GITHUB_SHA"
